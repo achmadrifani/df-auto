@@ -20,6 +20,8 @@ def calculate_tsi(dataset):
 
     # Calculate Dewpoint
     dew = mpcalc.dewpoint_from_relative_humidity(dataset['t'], dataset['r']).metpy.dequantify()
+    dew_850 = dew.sel(isobaricInhPa=850)
+    dew_700 = dew.sel(isobaricInhPa=700)
 
     temp_850 = dataset['t'].sel(isobaricInhPa=850).metpy.convert_units('degC').metpy.dequantify()
     temp_700 = dataset['t'].sel(isobaricInhPa=700).metpy.convert_units('degC').metpy.dequantify()
@@ -98,3 +100,65 @@ ds_tcc = xr.load_dataset(filename, engine='cfgrib', backend_kwargs={'filter_by_k
 
 tsi = calculate_tsi(ds_tsi)
 ww = calculate_ww(ds_tp, ds_vis, ds_tcc, tsi)
+
+# Load additional data
+ds_surface = xr.load_dataset(filename, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround','level':2.0}}).sel(latitude=lats, longitude=lons).interp(latitude=df_lats, longitude=df_lons, method='linear')
+ds_wind = xr.load_dataset(filename, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround','level':10.0}}).sel(latitude=lats, longitude=lons).interp(latitude=df_lats, longitude=df_lons, method='linear')
+
+coords = ds_tp.coords
+
+# Create dataset
+ds_fc = xr.Dataset(
+    {
+        'tp': (['latitude','longitude'],ds_tp['tp'].values),
+        'tsi': (['latitude','longitude'],tsi.values),
+        't2m': (['latitude','longitude'], ds_surface['t2m'].values),
+        'tcc': (['latitude','longitude'], ds_tcc['tcc'].values),
+        'vis': (['latitude','longitude'], ds_vis['vis'].values),
+        'r2': (['latitude','longitude'], ds_surface['r2'].values),
+    },
+    coords=coords,
+    attrs={
+        'GRIB_edition': 2,
+        'GRIB_centre': 'wiix',
+        'GRIB_centreDescription': 'Indonesia Meteorological Climatological and Geophysical Agency - BMKG',
+        'GRIB_subCentre': 0,
+        'Conventions': 'CF-1.7',
+        'institution': 'Indonesia Meteorological Climatological and Geophysical Agency - BMKG',
+    }
+)
+
+ds_fc_wind = xr.Dataset(
+    {
+        'u10': (['latitude','longitude'],ds_wind['u10'].values),
+        'v10': (['latitude','longitude'],ds_wind['v10'].values),
+    },
+    coords=coords,
+    attrs={
+        'GRIB_edition': 2,
+        'GRIB_centre': 'wiix',
+        'GRIB_centreDescription': 'Indonesia Meteorological Climatological and Geophysical Agency - BMKG',
+        'GRIB_subCentre': 0,
+        'Conventions': 'CF-1.7',
+        'institution': 'Indonesia Meteorological Climatological and Geophysical Agency - BMKG',
+    }
+)
+
+ds_af = xr.Dataset(
+    {
+        'ww': (['latitude','longitude'],ww.values),
+    },
+    coords=coords,
+    attrs={
+        'GRIB_edition': 2,
+        'GRIB_centre': 'wiix',
+        'GRIB_centreDescription': 'Indonesia Meteorological Climatological and Geophysical Agency - BMKG',
+        'GRIB_subCentre': 0,
+        'Conventions': 'CF-1.7',
+        'institution': 'Indonesia Meteorological Climatological and Geophysical Agency - BMKG',
+    }
+)
+
+# Save the dataset
+ds_complete = xr.merge([ds_fc, ds_fc_wind, ds_af],compat='override')
+ds_complete.to_netcdf('sample/df_auto_gfs_test.nc')
