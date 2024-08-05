@@ -204,6 +204,7 @@ def main():
         valid_time = init_time + timedelta(hours=step)
         file1 = find_file(model, init_time, valid_time)
         file2 = find_file(model, init_time, valid_time + timedelta(hours=1))  # file2 is needed for TP calculation
+        print(file1,file2)
         ds_tsi, ds_vis, ds_tcc, ds_tp, ds_t2, ds_r2, ds_wind = load_data(model, file1, file2)
 
         ww = calculate_ww(ds_tp, ds_vis, ds_tcc, ds_tsi)
