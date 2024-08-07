@@ -10,6 +10,21 @@ import re
 import os
 import eccodes
 
+MODEL_DIR = 'D:/Data/sample_ifs'
+DF_LATITUDES = 'D:/Projects/df-auto/src/df_latitudes.pkl'
+DF_LONGITUDES = 'D:/Projects/df-auto/src/df_longitudes.pkl'
+OUTPUT_DIR = 'D:/Projects/df-auto/output'
+
+FILE_PATTERN_DICT = {
+        'ECMWF__0.1': r'A1D{init_date:%m%d%H00}[0-9]+_R{init_date:%Y%m%d%H0000}_{valid_date:%Y%m%d%H0000}_{valid_date:%Y%m%d%H0000}.grib',
+        'AROME_SUS__0.025': r'arome_indo_{init_date:%Y%m%d}_{init_date:%H}00_{step:02d}.grib',
+    }
+
+FILE_PATH_DICT = {
+        'ECMWF__0.1': 'D:/Data/sample_ifs',
+        'AROME_SUS__0.025': 'D:/Data/sample_arome'
+    }
+
 
 def calculate_tsi(dataset):
     '''
@@ -100,17 +115,9 @@ def find_file(model, init_date, valid_date):
     :return: filename
     '''
 
-    file_pattern_dict = {
-        'ECMWF__0.1': 'A1D{init_date:%m%d%H00}[0-9]+_R{init_date:%Y%m%d%H0000}_{valid_date:%Y%m%d%H0000}_{valid_date:%Y%m%d%H0000}.grib'
-    }
-
-    file_path_dict = {
-        'ECMWF__0.1': 'D:/Data/sample_ifs'
-    }
-
     if model == 'ECMWF__0.1':
-        filepath = file_path_dict.get(model)
-        file_pattern_str = file_pattern_dict[model].format(
+        filepath = FILE_PATH_DICT.get(model)
+        file_pattern_str = FILE_PATTERN_DICT[model].format(
             init_date=init_date,
             valid_date=valid_date
         )
@@ -122,14 +129,12 @@ def find_file(model, init_date, valid_date):
     file_pattern = re.compile(file_pattern_str)
 
     for filename in os.listdir(filepath):
-        # print('checking:',filename)
-        # Check if the filename matches the pattern
         if file_pattern.match(filename):
             return os.path.join(filepath, filename)
     return None
 
 
-def load_data(model, filename1, filename2):
+def load_data(model, filename1, filename2=None):
     '''
     Load data and interpolate to digital forecast grid
 
@@ -138,10 +143,10 @@ def load_data(model, filename1, filename2):
     :return:
     '''
     # Load DF lats and lons
-    with open('D:/Projects/df-auto/src/df_latitudes.pkl', 'rb') as f:
+    with open(DF_LATITUDES, 'rb') as f:
         df_lats = pickle.load(f)
 
-    with open('D:/Projects/df-auto/src/df_longitudes.pkl', 'rb') as f:
+    with open(DF_LONGITUDES, 'rb') as f:
         df_lons = pickle.load(f)
 
     # Domain slice
@@ -168,14 +173,20 @@ def load_data(model, filename1, filename2):
             latitude=df_lats, longitude=df_lons, method='linear')['tcc'] * 100
 
         # Load data for TP
-        tp1 = xr.load_dataset(filename1, engine='cfgrib',
-                              backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface', 'edition': 1}}).sel(
-            latitude=lats, longitude=lons).interp(latitude=df_lats, longitude=df_lons, method='linear')['tp'] * 1000
-        tp2 = xr.load_dataset(filename2, engine='cfgrib',
-                              backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface', 'edition': 1}}).sel(
-            latitude=lats, longitude=lons).interp(latitude=df_lats, longitude=df_lons, method='linear')['tp'] * 1000
-        ds_tp = tp2 - tp1
-        ds_tp = ds_tp.where(ds_tp > 0, 0)
+        if filename2:
+            tp1 = xr.load_dataset(filename1, engine='cfgrib',
+                                  backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface', 'edition': 1}}).sel(
+                latitude=lats, longitude=lons).interp(latitude=df_lats, longitude=df_lons, method='linear')['tp'] * 1000
+            tp2 = xr.load_dataset(filename2, engine='cfgrib',
+                                  backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface', 'edition': 1}}).sel(
+                latitude=lats, longitude=lons).interp(latitude=df_lats, longitude=df_lons, method='linear')['tp'] * 1000
+            ds_tp = tp1 - tp2
+            ds_tp = ds_tp.where(ds_tp > 0, 0)
+        else:
+            ds_tp = xr.load_dataset(filename1, engine='cfgrib',
+                                    backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface', 'edition': 1}}).sel(
+                latitude=lats, longitude=lons).interp(latitude=df_lats, longitude=df_lons, method='linear')['tp'] * 1000
+
 
         # Load additional data
         ds_wind = xr.load_dataset(filename1, engine='cfgrib',
@@ -194,18 +205,21 @@ def load_data(model, filename1, filename2):
     else:
         return 'Model not found'
 
+
 def main():
     init_time = datetime(2024, 7, 31, 12)
     forecast_hour = 8
     step = 1
     model = 'ECMWF__0.1'
 
-    for i in range(0,forecast_hour,step):
-        valid_time = init_time + timedelta(hours=step)
+    for fh in range(1,forecast_hour,step):
+        valid_time = init_time + timedelta(hours=fh)
         file1 = find_file(model, init_time, valid_time)
-        file2 = find_file(model, init_time, valid_time + timedelta(hours=1))  # file2 is needed for TP calculation
-        print(file1,file2)
-        ds_tsi, ds_vis, ds_tcc, ds_tp, ds_t2, ds_r2, ds_wind = load_data(model, file1, file2)
+        file2 = find_file(model, init_time, valid_time - timedelta(hours=1))
+        if fh == step:
+            ds_tsi, ds_vis, ds_tcc, ds_tp, ds_t2, ds_r2, ds_wind = load_data(model, file1)
+        else:
+            ds_tsi, ds_vis, ds_tcc, ds_tp, ds_t2, ds_r2, ds_wind = load_data(model, file1, file2)
 
         ww = calculate_ww(ds_tp, ds_vis, ds_tcc, ds_tsi)
 
@@ -225,7 +239,7 @@ def main():
             'dataTime': dataTime,
             'stepType': 'instant',
             'stepUnits': 'h',
-            'step': step,
+            'step': fh,
             'typeOfLevel': 'heightAboveGround',
             'level': 0.0,  # Surface level is typically level 0
             'gridType': 'regular_ll',
@@ -251,7 +265,7 @@ def main():
                 'dataTime': dataTime,
                 'stepType': 'accum',
                 'stepUnits': 'h',
-                'step': step,
+                'step': fh,
                 'typeOfLevel': 'surface',
                 'level': 0.0,  # Surface level is typically level 0
                 'gridType': 'regular_ll',
@@ -280,7 +294,7 @@ def main():
                 'dataTime': dataTime,
                 'stepType': 'instant',
                 'stepUnits': 'h',
-                'step': step,
+                'step': fh,
                 'typeOfLevel': 'surface',
                 'level': 0.0,  # Surface level is typically level 0
                 'gridType': 'regular_ll',
@@ -306,7 +320,7 @@ def main():
                 'dataTime': dataTime,
                 'stepType': 'instant',
                 'stepUnits': 'h',
-                'step': step,
+                'step': fh,
                 'typeOfLevel': 'surface',
                 'level': 0.0,  # Surface level is typically level 0
                 'gridType': 'regular_ll',
@@ -334,7 +348,7 @@ def main():
                 'dataTime': dataTime,
                 'stepType': 'instant',
                 'stepUnits': 'h',
-                'step': step,
+                'step': fh,
                 'typeOfLevel': 'surface',
                 'level': 0.0,  # Surface level is typically level 0
                 'gridType': 'regular_ll',
@@ -363,7 +377,7 @@ def main():
                 'dataTime': dataTime,
                 'stepType': 'instant',
                 'stepUnits': 'h',
-                'step': step,
+                'step': fh,
                 'typeOfLevel': 'surface',
                 'level': 0.0,  # Surface level is typically level 0
                 'gridType': 'regular_ll',
@@ -389,7 +403,7 @@ def main():
                 'dataTime': dataTime,
                 'stepType': 'instant',
                 'stepUnits': 'h',
-                'step': step,
+                'step': fh,
                 'typeOfLevel': 'surface',
                 'level': 0.0,  # Surface level is typically level 0
                 'gridType': 'regular_ll',
@@ -418,7 +432,7 @@ def main():
                 'dataTime': dataTime,
                 'stepType': 'instant',
                 'stepUnits': 'h',
-                'step': step,
+                'step': fh,
                 'typeOfLevel': 'surface',
                 'level': 0.0,  # Surface level is typically level 0
                 'gridType': 'regular_ll',
@@ -447,7 +461,7 @@ def main():
                 'dataTime': dataTime,
                 'stepType': 'instant',
                 'stepUnits': 'h',
-                'step': step,
+                'step': fh,
                 'typeOfLevel': 'heightAboveGround',
                 'level': 10.0,  # Surface level is typically level 0
                 'gridType': 'regular_ll',
@@ -476,7 +490,7 @@ def main():
                 'dataTime': dataTime,
                 'stepType': 'instant',
                 'stepUnits': 'h',
-                'step': step,
+                'step': fh,
                 'typeOfLevel': 'heightAboveGround',
                 'level': 10.0,  # Surface level is typically level 0
                 'gridType': 'regular_ll',
@@ -500,10 +514,9 @@ def main():
             }
         ]
 
-        with open(f'sample/df_auto_ecmwf_{i}.grib', 'wb') as f:
+        with open(f'{OUTPUT_DIR}/df_auto_ecmwf_{fh}.grib', 'wb') as f:
             for data in grib_list:
                 gid = eccodes.codes_grib_new_from_samples('regular_ll_pl_grib2')
-                print(gid)
                 for key, value in data.items():
                     # print(key, value)
                     if key == 'values':
@@ -514,6 +527,7 @@ def main():
                         eccodes.codes_set(gid, key, value)
                 eccodes.codes_write(gid, f)
                 eccodes.codes_release(gid)
+
 
 if __name__ == '__main__':
     main()
